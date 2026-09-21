@@ -6,6 +6,7 @@ Allow DevBox users to adapt a development container through version-controlled p
 
 ## Scope
 
+- `devbox create <container-name>` clones the DevBox scaffold repository into a new container-project directory and initializes it for configuration.
 - Plugin selection and its canonical Git registry source are declared in committed `devbox.plugins.yml`.
 - `devbox.plugins.lock.yml` records the exact resolved registry commit used for reproducible builds.
 - An ignored `devbox.plugins.local.yml` can replace the Git source with a local registry path during plugin development.
@@ -20,30 +21,42 @@ Version 1 excludes multiple registries, arbitrary source URLs per plugin, remote
 ## Architecture
 
 ```text
-devbox.plugins.yml + devbox.plugins.lock.yml
-                  |                    ^
-                  v                    |
-     configured devbox-registry         | install/update resolves Git commit
-                  |
-                  v
-          plugin resolver
-  source selection -> discovery -> validation -> dependency ordering -> merge validation
-                  |
-                  v
-          .generated/plugins/
-          .devcontainer/devcontainer.json
-                  |
-                  +--> Docker image build hooks
-                  +--> container startup hooks
-                  +--> devbox plugin CLI
+devbox create <container-name>
+              |
+              v
+  clone pinned DevBox scaffold repository
+              |
+              v
+  <container-name>/  (new DevBox project)
+              |
+              +--> devbox plugin install <id>
+              |           |
+              |           v
+              |  devbox.plugins.yml + devbox.plugins.lock.yml
+              |                    |                    ^
+              |                    v                    |
+              |      configured devbox-registry          | install/update resolves Git commit
+              |                    |
+              |                    v
+              |            plugin resolver
+              |  source selection -> discovery -> validation -> dependency ordering -> merge validation
+              |                    |
+              |                    v
+              |            .generated/plugins/
+              |            .devcontainer/devcontainer.json
+              |                    |
+              |                    +--> Docker image build hooks
+              |                    +--> container startup hooks
+              |                    +--> devbox plugin CLI
 ```
 
-The resolver is the trust boundary. It materializes exactly one configured registry source, validates plugin identity and requested options, resolves dependencies, rejects conflicts, and writes generated files consumed by Docker, startup, and Dev Container integration. Normal Git-backed builds use only the exact commit in `devbox.plugins.lock.yml`; Docker and runtime scripts execute the generated resolved plan rather than independently accessing the registry.
+The `devbox` executable is the host-side command-line utility. `create` is its project bootstrap boundary; after cloning, all configuration-changing plugin commands operate on the generated project directory. The resolver is the plugin trust boundary. It materializes exactly one configured registry source, validates plugin identity and requested options, resolves dependencies, rejects conflicts, and writes generated files consumed by Docker, startup, and Dev Container integration. Normal Git-backed builds use only the exact commit in `devbox.plugins.lock.yml`; Docker and runtime scripts execute the generated resolved plan rather than independently accessing the registry.
 
 ## Repository Layout
 
 ```text
-# DevBox repository
+# DevBox scaffold repository (also a newly created DevBox project)
+.env.example                 # copied to .env by project initialization
 devbox.plugins.yml           # configured Git registry and enabled plugin options
 devbox.plugins.lock.yml      # resolved Git commit; version-controlled
 devbox.plugins.local.yml     # ignored local-path registry override
@@ -71,6 +84,25 @@ plugins/
 ```
 
 The concrete implementation language for the CLI and resolver should use project-standard tooling and avoid a new runtime dependency where practical. The resolver must run before `docker compose build` and before Dev Container tooling consumes generated configuration.
+
+## Project Creation
+
+The host-side `devbox` command creates an independently configurable DevBox project:
+
+```text
+devbox create <container-name> [--destination <path>] [--ref <git-ref>]
+```
+
+`create` clones the DevBox scaffold repository at the requested `--ref`; when omitted, it uses the CLI's documented default stable ref. The default destination is `./<container-name>`, and `--destination` selects a different target directory. The command validates that `<container-name>` is a safe directory basename, rejects an existing or non-empty destination, and creates no partial project directory when clone or initialization fails.
+
+After a successful clone, `create` copies `.env.example` to `.env` only when `.env` is absent, preserves the scaffold repository's Git metadata and checked-out ref, and prints the next commands:
+
+```text
+cd <container-name>
+devbox plugin install <plugin-id>
+```
+
+`create` does not install plugins, resolve a registry, build an image, start Docker Compose, or modify the cloned repository beyond initializing `.env`. Plugin configuration is intentionally explicit and occurs from the project directory through `devbox plugin install`, `uninstall`, and `update`. This preserves a clear audit trail in each project's `devbox.plugins.yml` and lock file.
 
 ## Registry Sources and User Configuration
 
@@ -180,6 +212,7 @@ The entrypoint invokes generated startup hooks after mounts and standard DevBox 
 The `devbox plugin` CLI owns registry synchronization and plugin configuration changes:
 
 ```text
+devbox create <container-name> [--destination <path>] [--ref <git-ref>]
 devbox plugin list
 devbox plugin installed
 devbox plugin install <id>
@@ -188,6 +221,7 @@ devbox plugin update [<id>]
 devbox plugin <plugin-id> <command> [args...]
 ```
 
+- `create` is run outside a DevBox project. It clones and initializes the scaffold as a new project; all other commands require that project's root directory.
 - `list` displays the catalog at the locked Git commit, or the active local path in development mode.
 - `installed` displays enabled plugin configuration, resolved versions, dependency state, and the source mode.
 - `install` fetches the configured Git `ref`, resolves and validates its immutable commit, validates the requested plugin and dependency closure, enables the requested plugin, and atomically writes `devbox.plugins.yml` and `devbox.plugins.lock.yml`. In local-path mode it validates and enables from the local registry without writing a lock.
@@ -230,6 +264,8 @@ Merge rules are explicit:
 
 ## Failure Handling
 
+`create` fails before writing a project if its name is unsafe, the destination exists or is non-empty, the requested scaffold ref cannot be resolved, cloning fails, or `.env.example` cannot be initialized. It removes only the new destination it created during the failed invocation and never replaces an existing path.
+
 Resolution fails before a Docker or Dev Container operation for an absent, stale, or mismatched Git lock; inaccessible registry snapshot; unknown plugin IDs/options; duplicate IDs; invalid option values; missing dependencies; conflicts; dependency cycles; unsafe paths; unsupported contributions; and merge conflicts.
 
 `install` and `update` leave configuration and locks unchanged if fetch, commit resolution, catalog validation, dependency resolution, or atomic write fails. Build-hook failures stop the Docker image build. Startup-hook failures are visible and do not record successful state. Command dispatch returns a clear error for disabled plugins, unknown commands, or unavailable generated state.
@@ -238,6 +274,7 @@ Resolution fails before a Docker or Dev Container operation for an absent, stale
 
 Unit tests cover:
 
+- `create` name and destination validation, scaffold-ref selection, clone failure cleanup, `.env` initialization, Git metadata preservation, and no implicit plugin installation;
 - Git and local-path source selection, lock validation, and snapshot materialization;
 - plugin discovery and manifest identity validation;
 - option defaults and schema validation;
@@ -247,8 +284,8 @@ Unit tests cover:
 - Dev Container merge, deduplication, and conflict rejection;
 - generated-plan determinism.
 
-Integration tests use a fixture registry to verify that Git installs resolve and lock immutable commits, updates advance only when explicitly requested, local-path overrides bypass locking and report development mode, enabled build hooks execute, disabled hooks do not execute, startup hooks remain idempotent across restarts, command dispatch respects declared users, and generated Dev Container contributions are valid and deterministic.
+Integration tests use a fixture scaffold and fixture registry to verify that `devbox create` produces an independently usable Git checkout with an initialized `.env`, followed by Git installs that resolve and lock immutable commits. They also verify that updates advance only when explicitly requested, local-path overrides bypass locking and report development mode, enabled build hooks execute, disabled hooks do not execute, startup hooks remain idempotent across restarts, command dispatch respects declared users, and generated Dev Container contributions are valid and deterministic.
 
 ## Acceptance Criteria
 
-A user can install a plugin from the separately maintained `devbox-registry`, which fetches the configured Git ref, records its immutable commit in `devbox.plugins.lock.yml`, validates the plugin, and enables it in `devbox.plugins.yml`. Builds reproduce the locked catalog without network access. A local-path override supports registry development and is marked non-reproducible. Installed plugins can be listed, uninstalled safely, explicitly updated, perform idempotent startup setup, expose declared commands, and add supported Dev Container configuration without modifying the tracked base `.devcontainer/devcontainer.base.json`. Invalid configuration fails before build or startup with an actionable error.
+A user can run `devbox create <container-name>` to clone a requested DevBox scaffold ref into a new, safe, empty destination; the result preserves the scaffold Git checkout, initializes `.env` from `.env.example`, and performs no implicit plugin, build, or container action. From that project directory, a user can install a plugin from the separately maintained `devbox-registry`, which fetches the configured Git ref, records its immutable commit in `devbox.plugins.lock.yml`, validates the plugin, and enables it in `devbox.plugins.yml`. Builds reproduce the locked catalog without network access. A local-path override supports registry development and is marked non-reproducible. Installed plugins can be listed, uninstalled safely, explicitly updated, perform idempotent startup setup, expose declared commands, and add supported Dev Container configuration without modifying the tracked base `.devcontainer/devcontainer.base.json`. Invalid configuration fails before build or startup with an actionable error.
