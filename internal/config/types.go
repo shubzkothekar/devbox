@@ -53,62 +53,89 @@ type LocalRegistry struct {
 // Manifest is the strict, typed representation of a plugin's plugin.yaml
 // contract as declared in the devbox-registry repository.
 type Manifest struct {
-	ID           string                     `yaml:"id"`
-	Name         string                     `yaml:"name"`
-	Version      string                     `yaml:"version"`
-	Description  string                     `yaml:"description"`
-	Requires     []string                   `yaml:"requires"`
-	Conflicts    []string                   `yaml:"conflicts"`
-	Options      map[string]ManifestOption  `yaml:"options,omitempty"`
-	Hooks        ManifestHooks              `yaml:"hooks,omitempty"`
-	Commands     map[string]ManifestCommand `yaml:"commands,omitempty"`
-	DevContainer ManifestDevContainer       `yaml:"devcontainer,omitempty"`
+	ID           string                   `yaml:"id"`
+	Version      string                   `yaml:"version"`
+	Requires     []string                 `yaml:"requires,omitempty"`
+	Conflicts    []string                 `yaml:"conflicts,omitempty"`
+	Options      map[string]OptionSchema  `yaml:"options,omitempty"`
+	Hooks        HookPaths                `yaml:"hooks,omitempty"`
+	Commands     map[string]CommandSchema `yaml:"commands,omitempty"`
+	DevContainer DevContainerContribution `yaml:"devcontainer,omitempty"`
 }
 
-// ManifestOption declares a single plugin option's type, default, and
-// optional value restrictions.
-type ManifestOption struct {
+// OptionSchema declares a single plugin option's type and default value.
+type OptionSchema struct {
 	Type    string `yaml:"type"`
 	Default any    `yaml:"default,omitempty"`
-	Enum    []any  `yaml:"enum,omitempty"`
 }
 
-// ManifestHooks declares the relative script paths invoked during image
-// build and container startup.
-type ManifestHooks struct {
+// HookPaths declares the relative script paths invoked during image build
+// and container startup, relative to the plugin directory.
+type HookPaths struct {
 	Build string `yaml:"build,omitempty"`
 	Start string `yaml:"start,omitempty"`
 }
 
-// ManifestCommand declares a developer-invoked plugin command and the user
-// it runs as.
-type ManifestCommand struct {
+// CommandSchema declares a developer-invoked plugin command's relative
+// script path and the user it runs as.
+type CommandSchema struct {
 	Path string `yaml:"path"`
 	User string `yaml:"user,omitempty"`
 }
 
-// ManifestDevContainer declares additive Dev Container configuration
+// DevContainerContribution declares additive Dev Container configuration
 // contributed by a plugin.
-type ManifestDevContainer struct {
+type DevContainerContribution struct {
 	Extensions         []string          `yaml:"extensions,omitempty"`
 	Mounts             []string          `yaml:"mounts,omitempty"`
 	ContainerEnv       map[string]string `yaml:"containerEnv,omitempty"`
 	PostCreateCommands []string          `yaml:"postCreateCommands,omitempty"`
 }
 
-// ResolvedPlan is the normalized, deterministic output of plugin
-// resolution: the ordered set of enabled plugins and the merged Dev
-// Container configuration to apply.
+// ResolvedPlan is the normalized, deterministic, JSON-safe output of plugin
+// resolution: the materialized registry source plus the ordered set of
+// enabled plugins with validated relative hook/command references. Later
+// build, startup, and Dev Container generation tasks consume this shape.
 type ResolvedPlan struct {
-	Plugins      []ResolvedPlugin     `json:"plugins"`
-	DevContainer ManifestDevContainer `json:"devContainer"`
+	Version int              `json:"version"`
+	Source  ResolvedSource   `json:"source"`
+	Plugins []ResolvedPlugin `json:"plugins"`
 }
 
-// ResolvedPlugin is a single enabled plugin's manifest and resolved option
-// values, in the order it should be applied.
+// PluginIDs returns the resolved plugins' IDs in plan (dependency-sorted)
+// order.
+func (p ResolvedPlan) PluginIDs() []string {
+	ids := make([]string, len(p.Plugins))
+	for i, plugin := range p.Plugins {
+		ids[i] = plugin.ID
+	}
+	return ids
+}
+
+// ResolvedSource records the materialized registry root and source mode
+// ("git" or "path") that produced a ResolvedPlan.
+type ResolvedSource struct {
+	Root string `json:"root"`
+	Mode string `json:"mode"`
+}
+
+// ResolvedPlugin is a single enabled plugin's identity, resolved option
+// values, and validated relative hook/command references, in the order it
+// should be applied.
 type ResolvedPlugin struct {
-	Manifest Manifest       `json:"manifest"`
-	Options  map[string]any `json:"options"`
+	ID       string                     `json:"id"`
+	Root     string                     `json:"root"`
+	Options  map[string]any             `json:"options"`
+	Build    string                     `json:"build,omitempty"`
+	Start    string                     `json:"start,omitempty"`
+	Commands map[string]ResolvedCommand `json:"commands,omitempty"`
+}
+
+// ResolvedCommand is a single developer-invoked plugin command's validated
+// relative script path and the user it runs as.
+type ResolvedCommand struct {
+	Path string `json:"path"`
+	User string `json:"user,omitempty"`
 }
 
 // ProjectState is the fully loaded configuration for a DevBox project
