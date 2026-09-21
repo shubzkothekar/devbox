@@ -1,0 +1,122 @@
+package config
+
+// ProjectConfig is the strict, typed representation of a project's
+// devbox.plugins.yml file: the configured registry source and the set of
+// enabled/disabled plugin selections.
+type ProjectConfig struct {
+	Registry RegistryConfig             `yaml:"registry"`
+	Plugins  map[string]PluginSelection `yaml:"plugins"`
+}
+
+// RegistryConfig declares the canonical Git registry source for plugin
+// resolution.
+type RegistryConfig struct {
+	Source string `yaml:"source"`
+	URL    string `yaml:"url"`
+	Ref    string `yaml:"ref"`
+}
+
+// PluginSelection is a single plugin's enabled state and user-supplied
+// options as declared in devbox.plugins.yml.
+type PluginSelection struct {
+	Enabled bool           `yaml:"enabled"`
+	Options map[string]any `yaml:"options,omitempty"`
+}
+
+// RegistryLock is the strict, typed representation of a project's
+// devbox.plugins.lock.yml file: the exact resolved registry commit.
+type RegistryLock struct {
+	Registry LockedRegistry `yaml:"registry"`
+}
+
+// LockedRegistry pins the registry URL, ref, and resolved commit used for
+// reproducible builds.
+type LockedRegistry struct {
+	URL    string `yaml:"url"`
+	Ref    string `yaml:"ref"`
+	Commit string `yaml:"commit"`
+}
+
+// LocalOverride is the strict, typed representation of a project's
+// (gitignored) devbox.plugins.local.yml file, which replaces the configured
+// Git registry source with a local path for plugin development.
+type LocalOverride struct {
+	Registry LocalRegistry `yaml:"registry"`
+}
+
+// LocalRegistry declares a non-reproducible, local-path registry source.
+type LocalRegistry struct {
+	Source string `yaml:"source"`
+	Path   string `yaml:"path"`
+}
+
+// Manifest is the strict, typed representation of a plugin's plugin.yaml
+// contract as declared in the devbox-registry repository.
+type Manifest struct {
+	ID           string                     `yaml:"id"`
+	Name         string                     `yaml:"name"`
+	Version      string                     `yaml:"version"`
+	Description  string                     `yaml:"description"`
+	Requires     []string                   `yaml:"requires"`
+	Conflicts    []string                   `yaml:"conflicts"`
+	Options      map[string]ManifestOption  `yaml:"options,omitempty"`
+	Hooks        ManifestHooks              `yaml:"hooks,omitempty"`
+	Commands     map[string]ManifestCommand `yaml:"commands,omitempty"`
+	DevContainer ManifestDevContainer       `yaml:"devcontainer,omitempty"`
+}
+
+// ManifestOption declares a single plugin option's type, default, and
+// optional value restrictions.
+type ManifestOption struct {
+	Type    string `yaml:"type"`
+	Default any    `yaml:"default,omitempty"`
+	Enum    []any  `yaml:"enum,omitempty"`
+}
+
+// ManifestHooks declares the relative script paths invoked during image
+// build and container startup.
+type ManifestHooks struct {
+	Build string `yaml:"build,omitempty"`
+	Start string `yaml:"start,omitempty"`
+}
+
+// ManifestCommand declares a developer-invoked plugin command and the user
+// it runs as.
+type ManifestCommand struct {
+	Path string `yaml:"path"`
+	User string `yaml:"user,omitempty"`
+}
+
+// ManifestDevContainer declares additive Dev Container configuration
+// contributed by a plugin.
+type ManifestDevContainer struct {
+	Extensions         []string          `yaml:"extensions,omitempty"`
+	Mounts             []string          `yaml:"mounts,omitempty"`
+	ContainerEnv       map[string]string `yaml:"containerEnv,omitempty"`
+	PostCreateCommands []string          `yaml:"postCreateCommands,omitempty"`
+}
+
+// ResolvedPlan is the normalized, deterministic output of plugin
+// resolution: the ordered set of enabled plugins and the merged Dev
+// Container configuration to apply.
+type ResolvedPlan struct {
+	Plugins      []ResolvedPlugin     `json:"plugins"`
+	DevContainer ManifestDevContainer `json:"devContainer"`
+}
+
+// ResolvedPlugin is a single enabled plugin's manifest and resolved option
+// values, in the order it should be applied.
+type ResolvedPlugin struct {
+	Manifest Manifest       `json:"manifest"`
+	Options  map[string]any `json:"options"`
+}
+
+// ProjectState is the fully loaded configuration for a DevBox project
+// rooted at Root: the required project configuration plus the optional
+// lock file and local registry override, when present.
+type ProjectState struct {
+	Root     string
+	Config   ProjectConfig
+	Lock     *RegistryLock
+	Override *LocalOverride
+}
