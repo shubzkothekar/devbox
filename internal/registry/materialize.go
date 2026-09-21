@@ -237,6 +237,11 @@ func gitRevParseHEAD(ctx context.Context, repoDir string) (string, error) {
 	return string(sha), nil
 }
 
+// SnapshotCommit returns the HEAD commit hash of the git repository at repoDir.
+func SnapshotCommit(ctx context.Context, repoDir string) (string, error) {
+	return gitRevParseHEAD(ctx, repoDir)
+}
+
 func runGit(ctx context.Context, dir string, args ...string) error {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", args...)

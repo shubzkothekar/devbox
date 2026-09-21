@@ -54,7 +54,9 @@ type LocalRegistry struct {
 // contract as declared in the devbox-registry repository.
 type Manifest struct {
 	ID           string                   `yaml:"id"`
+	Name         string                   `yaml:"name,omitempty"`
 	Version      string                   `yaml:"version"`
+	Description  string                   `yaml:"description,omitempty"`
 	Requires     []string                 `yaml:"requires,omitempty"`
 	Conflicts    []string                 `yaml:"conflicts,omitempty"`
 	Options      map[string]OptionSchema  `yaml:"options,omitempty"`
