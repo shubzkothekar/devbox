@@ -1,0 +1,32 @@
+{
+  "name": "DevBox",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "devbox",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+
+  "customizations": {
+    "zed": {
+      "extensions": [
+        "dockerfile",
+        "docker-compose",
+        "html"
+      ]
+    },
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+
+  "remoteUser": "devbox"
+}
