@@ -8,6 +8,7 @@ A high-performance, modular Linux development container designed for macOS via *
 
 - [Overview & Architecture](#-overview--architecture)
 - [Prerequisites](#-prerequisites)
+- [Create a DevBox Project](#create-a-devbox-project)
 - [Quick Start](#-quick-start)
 - [Runtime Configuration via `.env`](#-runtime-configuration-via-env)
   - [Available Runtime Flags](#available-runtime-flags)
@@ -51,6 +52,20 @@ brew install colima docker docker-compose
 # Ensure you have an SSH ed25519 key generated on your Mac
 [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519 -C "devbox"
 ```
+
+---
+
+## Create a DevBox Project
+
+Install the host-side `devbox` CLI, then create a new scaffold checkout:
+
+```bash
+devbox create my-api --ref v1.0.0
+cd my-api
+devbox plugin install docker
+```
+
+`create` preserves the scaffold repository's Git history, initializes `.env` from `.env.example`, and does not build or start a container. Use `--destination /absolute/or/relative/path` to choose a target other than `./my-api`.
 
 ---
 

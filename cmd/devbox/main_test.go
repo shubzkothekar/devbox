@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,6 +79,31 @@ func TestCLISyntaxValidation(t *testing.T) {
 		{
 			name:    "create missing container name",
 			args:    []string{"create"},
+			wantErr: "usage: devbox create <container-name>",
+		},
+		{
+			name:    "create missing destination value",
+			args:    []string{"create", "my-app", "--destination"},
+			wantErr: "usage: devbox create <container-name>",
+		},
+		{
+			name:    "create missing ref value",
+			args:    []string{"create", "my-app", "--ref"},
+			wantErr: "usage: devbox create <container-name>",
+		},
+		{
+			name:    "create unknown flag",
+			args:    []string{"create", "my-app", "--unknown"},
+			wantErr: `unknown flag "--unknown"`,
+		},
+		{
+			name:    "create extra positional args",
+			args:    []string{"create", "my-app", "extra"},
+			wantErr: "usage: devbox create <container-name>",
+		},
+		{
+			name:    "create flag after extra positional args",
+			args:    []string{"create", "my-app", "extra", "--ref", "main"},
 			wantErr: "usage: devbox create <container-name>",
 		},
 		{
@@ -332,6 +358,102 @@ func TestCLIPluginLocalOverride(t *testing.T) {
 	}
 	if !strings.Contains(out, "docker (2.0.0) - Local Docker") {
 		t.Fatalf("expected local docker catalog entry, got: %s", out)
+	}
+}
+
+func fixtureScaffoldRepository(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	runFixtureGit(t, dir, "init", "-b", "main")
+	runFixtureGit(t, dir, "config", "user.name", "DevBox Test")
+	runFixtureGit(t, dir, "config", "user.email", "test@example.com")
+
+	envExample := filepath.Join(dir, ".env.example")
+	if err := os.WriteFile(envExample, []byte("INSTALL_GO=true\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(.env.example): %v", err)
+	}
+
+	readme := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(readme, []byte("# Scaffold\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(README.md): %v", err)
+	}
+
+	runFixtureGit(t, dir, "add", "-A")
+	runFixtureGit(t, dir, "commit", "-m", "initial scaffold commit")
+	return dir
+}
+
+func TestCLICreate(t *testing.T) {
+	scaffold := fixtureScaffoldRepository(t)
+	t.Setenv("DEVBOX_SCAFFOLD_URL", scaffold)
+
+	// 1. Successful create with explicit destination and ref
+	targetDir := filepath.Join(t.TempDir(), "custom-api")
+	{
+		var stdout, stderr bytes.Buffer
+		err := run([]string{"create", "custom-api", "--destination", targetDir, "--ref", "main"}, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("create failed: %v", err)
+		}
+		expectedOut := fmt.Sprintf("Created DevBox project: %s\nNext:\n  cd %s\n  devbox plugin install <plugin-id>\n", targetDir, targetDir)
+		if stdout.String() != expectedOut {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), expectedOut)
+		}
+
+		if _, err := os.Stat(filepath.Join(targetDir, ".git")); err != nil {
+			t.Fatalf(".git missing: %v", err)
+		}
+		envPath := filepath.Join(targetDir, ".env")
+		data, err := os.ReadFile(envPath)
+		if err != nil {
+			t.Fatalf(".env missing: %v", err)
+		}
+		if string(data) != "INSTALL_GO=true\n" {
+			t.Fatalf(".env content = %q", string(data))
+		}
+		info, err := os.Stat(envPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Fatalf(".env perm = %#o, want 0600", perm)
+		}
+	}
+
+	// 2. Reject existing destination
+	{
+		var stdout, stderr bytes.Buffer
+		err := run([]string{"create", "custom-api", "--destination", targetDir}, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("expected already exists error, got %v", err)
+		}
+	}
+
+	// 3. Successful create with default destination
+	{
+		tmpDir := t.TempDir()
+		origDir, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chdir(origDir) }()
+
+		var stdout, stderr bytes.Buffer
+		err = run([]string{"create", "default-api"}, &stdout, &stderr)
+		if err != nil {
+			t.Fatalf("create with default dest failed: %v", err)
+		}
+		expectedOut := "Created DevBox project: ./default-api\nNext:\n  cd ./default-api\n  devbox plugin install <plugin-id>\n"
+		if stdout.String() != expectedOut {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), expectedOut)
+		}
+		if _, err := os.Stat(filepath.Join(tmpDir, "default-api", ".git")); err != nil {
+			t.Fatalf("cloned .git missing: %v", err)
+		}
 	}
 }
 

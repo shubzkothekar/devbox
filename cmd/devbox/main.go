@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/shubzkothekar/devbox/internal/plugins"
+	"github.com/shubzkothekar/devbox/internal/project"
 )
 
 func main() {
@@ -28,10 +29,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	switch args[0] {
 	case "create":
-		if len(args) < 2 {
-			return errors.New("usage: devbox create <container-name>")
-		}
-		return fmt.Errorf("unsupported command %q", args[0])
+		return runCreate(args[1:], stdout, stderr)
 
 	case "plugin":
 		return runPlugin(args[1:], stdout, stderr)
@@ -39,6 +37,67 @@ func run(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unsupported command %q", args[0])
 	}
+}
+
+func runCreate(args []string, stdout, stderr io.Writer) error {
+	var name string
+	var destination string
+	var ref string
+	var seenExtraPositional bool
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			if seenExtraPositional {
+				return errors.New("usage: devbox create <container-name> [--destination <path>] [--ref <git-ref>]")
+			}
+			switch {
+			case arg == "--destination":
+				if i+1 >= len(args) {
+					return errors.New("usage: devbox create <container-name> [--destination <path>] [--ref <git-ref>]")
+				}
+				i++
+				destination = args[i]
+			case strings.HasPrefix(arg, "--destination="):
+				destination = strings.TrimPrefix(arg, "--destination=")
+			case arg == "--ref":
+				if i+1 >= len(args) {
+					return errors.New("usage: devbox create <container-name> [--destination <path>] [--ref <git-ref>]")
+				}
+				i++
+				ref = args[i]
+			case strings.HasPrefix(arg, "--ref="):
+				ref = strings.TrimPrefix(arg, "--ref=")
+			default:
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+		} else {
+			if name == "" {
+				name = arg
+			} else {
+				seenExtraPositional = true
+			}
+		}
+	}
+
+	if name == "" || seenExtraPositional {
+		return errors.New("usage: devbox create <container-name> [--destination <path>] [--ref <git-ref>]")
+	}
+
+	ctx := context.Background()
+	scaffoldURL := os.Getenv("DEVBOX_SCAFFOLD_URL")
+	result, err := project.Create(ctx, project.CreateRequest{
+		Name:        name,
+		Destination: destination,
+		Ref:         ref,
+		ScaffoldURL: scaffoldURL,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "Created DevBox project: %s\nNext:\n  cd %s\n  devbox plugin install <plugin-id>\n", result.Root, result.Root)
+	return nil
 }
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {
