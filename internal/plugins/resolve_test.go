@@ -258,3 +258,44 @@ func TestResolveRejectsMissingHookFile(t *testing.T) {
 		t.Fatal("error = nil, want error for missing hook file")
 	}
 }
+
+// TestResolveRejectsSymlinkedIntermediateDirectory guards against a path
+// escape where the hook path's leaf component is a plain regular file, but
+// an intermediate directory on the way to it is a symlink pointing outside
+// pluginRoot. Lstat-ing only the leaf misses this: the leaf is a genuine
+// regular file, so a check limited to the final path component never sees
+// the symlink at all.
+func TestResolveRejectsSymlinkedIntermediateDirectory(t *testing.T) {
+	root := t.TempDir()
+
+	// Outside directory containing the "real" script the escape targets.
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0755); err != nil {
+		t.Fatalf("MkdirAll(outside): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "payload.sh"), []byte("#!/bin/sh\necho pwned\n"), 0755); err != nil {
+		t.Fatalf("WriteFile(payload.sh): %v", err)
+	}
+
+	pluginDir := filepath.Join(root, "plugins", "base")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(pluginDir): %v", err)
+	}
+	manifest := "id: base\nversion: 1.0.0\nhooks:\n  build: link/payload.sh\n"
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.yaml"), []byte(manifest), 0644); err != nil {
+		t.Fatalf("WriteFile(plugin.yaml): %v", err)
+	}
+
+	// The intermediate directory "link" is a symlink pointing outside
+	// pluginRoot; "link/payload.sh" resolves to a real, regular file, but
+	// only by first escaping through the symlinked directory.
+	if err := os.Symlink(outside, filepath.Join(pluginDir, "link")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	source := registry.Source{Root: root, Mode: "git"}
+	_, err := Resolve(source, map[string]config.PluginSelection{"base": {Enabled: true}})
+	if err == nil || !strings.Contains(err.Error(), "escapes plugin directory") {
+		t.Fatalf("error = %v, want path safety error for symlinked intermediate directory", err)
+	}
+}

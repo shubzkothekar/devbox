@@ -317,25 +317,26 @@ func validateRelPath(pluginRoot, rel string) (string, error) {
 		return "", fmt.Errorf("path %q escapes plugin directory", rel)
 	}
 
-	info, err := os.Lstat(candidate)
+	// EvalSymlinks resolves every path component, not just the leaf, so a
+	// symlink at any intermediate directory (not only the final file) is
+	// caught here. Resolving pluginRoot too keeps the comparison anchored
+	// to the same canonical (fully symlink-resolved) coordinate space.
+	canonicalRoot, err := filepath.EvalSymlinks(pluginRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve plugin root %q: %w", pluginRoot, err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
 		return "", fmt.Errorf("path %q: %w", rel, err)
 	}
-
-	if info.Mode()&os.ModeSymlink != 0 {
-		resolvedTarget, err := filepath.EvalSymlinks(candidate)
-		if err != nil {
-			return "", fmt.Errorf("path %q: resolve symlink: %w", rel, err)
-		}
-		if escapes(pluginRoot, resolvedTarget) {
-			return "", fmt.Errorf("path %q: symlink target escapes plugin directory", rel)
-		}
-		info, err = os.Stat(resolvedTarget)
-		if err != nil {
-			return "", fmt.Errorf("path %q: %w", rel, err)
-		}
+	if escapes(canonicalRoot, resolvedTarget) {
+		return "", fmt.Errorf("path %q: symlink target escapes plugin directory", rel)
 	}
 
+	info, err := os.Stat(resolvedTarget)
+	if err != nil {
+		return "", fmt.Errorf("path %q: %w", rel, err)
+	}
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("path %q is not a regular file", rel)
 	}
