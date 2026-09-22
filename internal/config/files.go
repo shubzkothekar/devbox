@@ -124,6 +124,11 @@ func WriteJSONAtomic(path string, value any) error {
 	return writeFileAtomic(path, data)
 }
 
+// WriteFileAtomic writes data to path atomically using a temporary file.
+func WriteFileAtomic(path string, data []byte) error {
+	return writeFileAtomic(path, data)
+}
+
 func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".tmp-*")

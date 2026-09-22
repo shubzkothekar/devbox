@@ -4,6 +4,13 @@
 # Features: Configurable Runtimes (Go, Node.js, Python, Bun, Rust), OpenVPN, OpenSSH Server, DB CLI Tools
 # =============================================================================
 
+FROM golang:1.24 AS devbox-builder
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /bin/devbox ./cmd/devbox
+
 FROM ubuntu:24.04
 
 # Prevent interactive prompts during package installation
@@ -75,6 +82,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     zsh \
     && rm -rf /var/lib/apt/lists/*
+
+# 1.1 Plugin System: Install CLI and execute pre-resolved build hooks
+COPY --from=devbox-builder /bin/devbox /usr/local/bin/devbox
+COPY .generated/plugins/plan.json /opt/devbox/plugins/plan.json
+COPY .generated/plugins /opt/devbox/plugins
+COPY scripts/run-plugin-builds /usr/local/bin/run-plugin-builds
+RUN chmod +x /usr/local/bin/run-plugin-builds && /usr/local/bin/run-plugin-builds
 
 # 2. Golang Toolchain (Optional: controlled by INSTALL_GO)
 RUN if [ "$INSTALL_GO" = "true" ]; then \
@@ -215,12 +229,16 @@ COPY scripts/devbox-env.sh /etc/profile.d/devbox.sh
 COPY scripts/devbox-info.sh /usr/local/bin/devbox-info
 COPY scripts/connect-vpn.sh /usr/local/bin/connect-vpn
 COPY scripts/setup-git-auth.sh /usr/local/bin/setup-git-auth
+COPY scripts/run-plugin-starts /usr/local/bin/run-plugin-starts
+COPY scripts/devbox-plugin /usr/local/bin/devbox-plugin
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN chmod 644 /etc/profile.d/devbox.sh && \
     chmod +x /usr/local/bin/devbox-info \
              /usr/local/bin/connect-vpn \
              /usr/local/bin/setup-git-auth \
+             /usr/local/bin/run-plugin-starts \
+             /usr/local/bin/devbox-plugin \
              /usr/local/bin/entrypoint.sh && \
     echo '[ -f /etc/profile.d/devbox.sh ] && . /etc/profile.d/devbox.sh' >> /home/${USERNAME}/.bashrc && \
     echo 'cd /workspace 2>/dev/null || true' >> /home/${USERNAME}/.bashrc && \

@@ -38,7 +38,11 @@ func initTestRegistry(t *testing.T, files map[string]string) string {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
 		}
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		mode := os.FileMode(0644)
+		if strings.HasSuffix(rel, ".sh") {
+			mode = 0755
+		}
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
 			t.Fatalf("WriteFile(%s): %v", path, err)
 		}
 	}

@@ -88,10 +88,11 @@ type CommandSchema struct {
 // DevContainerContribution declares additive Dev Container configuration
 // contributed by a plugin.
 type DevContainerContribution struct {
-	Extensions         []string          `yaml:"extensions,omitempty"`
-	Mounts             []string          `yaml:"mounts,omitempty"`
-	ContainerEnv       map[string]string `yaml:"containerEnv,omitempty"`
-	PostCreateCommands []string          `yaml:"postCreateCommands,omitempty"`
+	Extensions         []string          `yaml:"extensions,omitempty" json:"extensions,omitempty"`
+	Mounts             []string          `yaml:"mounts,omitempty" json:"mounts,omitempty"`
+	ContainerEnv       map[string]string `yaml:"containerEnv,omitempty" json:"containerEnv,omitempty"`
+	PostCreateCommands []string          `yaml:"postCreateCommands,omitempty" json:"postCreateCommands,omitempty"`
+	ForwardPorts       []int             `yaml:"forwardPorts,omitempty" json:"forwardPorts,omitempty"`
 }
 
 // ResolvedPlan is the normalized, deterministic, JSON-safe output of plugin
@@ -125,12 +126,13 @@ type ResolvedSource struct {
 // values, and validated relative hook/command references, in the order it
 // should be applied.
 type ResolvedPlugin struct {
-	ID       string                     `json:"id"`
-	Root     string                     `json:"root"`
-	Options  map[string]any             `json:"options"`
-	Build    string                     `json:"build,omitempty"`
-	Start    string                     `json:"start,omitempty"`
-	Commands map[string]ResolvedCommand `json:"commands,omitempty"`
+	ID           string                     `json:"id"`
+	Root         string                     `json:"root"`
+	Options      map[string]any             `json:"options"`
+	Build        string                     `json:"build,omitempty"`
+	Start        string                     `json:"start,omitempty"`
+	Commands     map[string]ResolvedCommand `json:"commands,omitempty"`
+	DevContainer DevContainerContribution   `json:"devcontainer,omitempty"`
 }
 
 // ResolvedCommand is a single developer-invoked plugin command's validated

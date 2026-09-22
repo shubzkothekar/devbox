@@ -207,9 +207,10 @@ func resolvePlugin(id string, entry catalogEntry, selection config.PluginSelecti
 	}
 
 	resolved := config.ResolvedPlugin{
-		ID:      id,
-		Root:    entry.dir,
-		Options: options,
+		ID:           id,
+		Root:         entry.dir,
+		Options:      options,
+		DevContainer: entry.manifest.DevContainer,
 	}
 
 	if entry.manifest.Hooks.Build != "" {

@@ -1,22 +1,29 @@
-// Command devbox is the host-side CLI for creating and configuring DevBox
+// Package main provides the devbox CLI for creating and configuring DevBox
 // projects.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/shubzkothekar/devbox/internal/config"
 	"github.com/shubzkothekar/devbox/internal/plugins"
 	"github.com/shubzkothekar/devbox/internal/project"
 )
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		var procExitErr *exec.ExitError
+		if errors.As(err, &procExitErr) {
+			os.Exit(procExitErr.ExitCode())
+		}
 		fmt.Fprintln(os.Stderr, "devbox:", err)
 		os.Exit(1)
 	}
@@ -84,19 +91,24 @@ func runCreate(args []string, stdout, stderr io.Writer) error {
 		return errors.New("usage: devbox create <container-name> [--destination <path>] [--ref <git-ref>]")
 	}
 
-	ctx := context.Background()
-	scaffoldURL := os.Getenv("DEVBOX_SCAFFOLD_URL")
-	result, err := project.Create(ctx, project.CreateRequest{
+	result, err := project.Create(context.Background(), project.CreateRequest{
 		Name:        name,
 		Destination: destination,
 		Ref:         ref,
-		ScaffoldURL: scaffoldURL,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(stdout, "Created DevBox project: %s\nNext:\n  cd %s\n  devbox plugin install <plugin-id>\n", result.Root, result.Root)
+	displayDest := destination
+	if displayDest == "" {
+		displayDest = "./" + name
+	}
+
+	fmt.Fprintf(stdout, "Created DevBox project: %s\n", result.Root)
+	fmt.Fprintf(stdout, "Next:\n")
+	fmt.Fprintf(stdout, "  cd %s\n", displayDest)
+	fmt.Fprintf(stdout, "  devbox plugin install <plugin-id>\n")
 	return nil
 }
 
@@ -220,24 +232,199 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Resolved %d plugin(s)\n", len(plan.Plugins))
 		return nil
 
+	case "hook-env":
+		return runHookEnv(posArgs[1:], stdout, stderr)
+
+	case "exec":
+		return runPluginExec(posArgs[1:], stdout, stderr, projectRoot)
+
 	default:
-		return dispatchPluginCommand(ctx, posArgs, stdout, service)
+		return runPluginExec(posArgs, stdout, stderr, projectRoot)
 	}
 }
 
-func dispatchPluginCommand(ctx context.Context, args []string, stdout io.Writer, service plugins.Service) error {
-	if len(args) < 2 {
+func runHookEnv(args []string, stdout, stderr io.Writer) error {
+	var pluginJSON string
+	var cmdArgs []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			cmdArgs = append(cmdArgs, args[i+1:]...)
+			break
+		}
+		if arg == "--plugin-json" {
+			if i+1 >= len(args) {
+				return errors.New("usage: devbox plugin hook-env --plugin-json <json> -- <command> [args...]")
+			}
+			i++
+			pluginJSON = args[i]
+		} else if strings.HasPrefix(arg, "--plugin-json=") {
+			pluginJSON = strings.TrimPrefix(arg, "--plugin-json=")
+		} else {
+			cmdArgs = append(cmdArgs, arg)
+		}
+	}
+
+	if pluginJSON == "" || len(cmdArgs) == 0 {
+		return errors.New("usage: devbox plugin hook-env --plugin-json <json> -- <command> [args...]")
+	}
+
+	var plugin config.ResolvedPlugin
+	if err := json.Unmarshal([]byte(pluginJSON), &plugin); err != nil {
+		return fmt.Errorf("invalid plugin json: %w", err)
+	}
+
+	envVars := plugins.OptionEnvVars(plugin.ID, plugin.Options)
+	envVars = append(envVars, "DEVBOX_PLUGIN_ID="+plugin.ID)
+	if plugin.Root != "" {
+		envVars = append(envVars, "DEVBOX_PLUGIN_ROOT="+plugin.Root)
+	}
+
+	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.Env = append(os.Environ(), envVars...)
+	return cmd.Run()
+}
+
+func runPluginExec(args []string, stdout, stderr io.Writer, projectRoot string) error {
+	var planPath string
+	var posArgs []string
+	var extraArgs []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			extraArgs = append(extraArgs, args[i+1:]...)
+			break
+		}
+		if arg == "--plan" {
+			if i+1 >= len(args) {
+				return errors.New("usage: devbox plugin exec [--plan <path>] <plugin-id> <command> [--] [args...]")
+			}
+			i++
+			planPath = args[i]
+		} else if strings.HasPrefix(arg, "--plan=") {
+			planPath = strings.TrimPrefix(arg, "--plan=")
+		} else {
+			posArgs = append(posArgs, arg)
+		}
+	}
+
+	if len(posArgs) < 2 {
 		return errors.New("usage: devbox plugin <plugin-id> <command> [args...]")
 	}
-	pluginID := args[0]
-	command := args[1]
-	_, _, err := service.FindCommand(ctx, pluginID, command)
-	if err != nil {
-		return err
+
+	pluginID := posArgs[0]
+	commandName := posArgs[1]
+	if len(posArgs) > 2 {
+		extraArgs = append(posArgs[2:], extraArgs...)
 	}
-	// Route plugin command dispatch metadata through a later exec implementation;
-	// this task only resolves and validates command identity.
-	return nil
+
+	var targetPlugin config.ResolvedPlugin
+	var targetCmd config.ResolvedCommand
+	var found bool
+
+	if planPath == "" {
+		if envPlan := os.Getenv("DEVBOX_PLUGIN_PLAN"); envPlan != "" {
+			planPath = envPlan
+		} else {
+			candidateProject := filepath.Join(projectRoot, ".generated", "plugins", "plan.json")
+			if _, err := os.Stat(candidateProject); err == nil {
+				planPath = candidateProject
+			} else if _, err := os.Stat("/opt/devbox/plugins/plan.json"); err == nil {
+				planPath = "/opt/devbox/plugins/plan.json"
+			}
+		}
+	}
+
+	if planPath != "" {
+		planBytes, err := os.ReadFile(planPath)
+		if err == nil {
+			var plan config.ResolvedPlan
+			if err := json.Unmarshal(planBytes, &plan); err == nil {
+				for _, p := range plan.Plugins {
+					if p.ID == pluginID {
+						cmd, ok := p.Commands[commandName]
+						if ok {
+							targetPlugin = p
+							targetCmd = cmd
+							found = true
+							break
+						}
+						return fmt.Errorf("plugin %q has no command %q", pluginID, commandName)
+					}
+				}
+				if !found {
+					return fmt.Errorf("plugin %q is not enabled or not found", pluginID)
+				}
+			}
+		}
+	}
+
+	if !found {
+		ctx := context.Background()
+		service := plugins.NewService(projectRoot)
+		p, cmd, err := service.FindCommand(ctx, pluginID, commandName)
+		if err != nil {
+			return err
+		}
+		targetPlugin = p
+		targetCmd = cmd
+	}
+
+	if targetCmd.User == "" {
+		targetCmd.User = "devbox"
+	}
+
+	actualRoot := targetPlugin.Root
+	scriptPath := filepath.Join(actualRoot, targetCmd.Path)
+	if _, err := os.Stat(scriptPath); err != nil {
+		if planPath != "" {
+			altRoot := filepath.Join(filepath.Dir(planPath), targetPlugin.ID)
+			altPath := filepath.Join(altRoot, targetCmd.Path)
+			if _, err2 := os.Stat(altPath); err2 == nil {
+				actualRoot = altRoot
+				scriptPath = altPath
+			}
+		}
+	}
+
+	envVars := plugins.OptionEnvVars(targetPlugin.ID, targetPlugin.Options)
+	envVars = append(envVars, "DEVBOX_PLUGIN_ID="+targetPlugin.ID)
+	if actualRoot != "" {
+		envVars = append(envVars, "DEVBOX_PLUGIN_ROOT="+actualRoot)
+	}
+
+	var execCmd *exec.Cmd
+	if targetCmd.User == "root" {
+		if os.Geteuid() == 0 {
+			execCmd = exec.Command(scriptPath, extraArgs...)
+		} else {
+			sudoArgs := append([]string{"-n", "-E", scriptPath}, extraArgs...)
+			execCmd = exec.Command("sudo", sudoArgs...)
+		}
+	} else {
+		if os.Geteuid() == 0 && targetCmd.User != "" {
+			targetUser := targetCmd.User
+			if _, err := exec.LookPath("runuser"); err == nil {
+				runuserArgs := append([]string{"-u", targetUser, "--", scriptPath}, extraArgs...)
+				execCmd = exec.Command("runuser", runuserArgs...)
+			} else {
+				execCmd = exec.Command(scriptPath, extraArgs...)
+			}
+		} else {
+			execCmd = exec.Command(scriptPath, extraArgs...)
+		}
+	}
+
+	execCmd.Stdin = os.Stdin
+	execCmd.Stdout = stdout
+	execCmd.Stderr = stderr
+	execCmd.Env = append(os.Environ(), envVars...)
+	return execCmd.Run()
 }
 
 func printCatalog(w io.Writer, mode string, catalog []plugins.CatalogPlugin) error {

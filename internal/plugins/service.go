@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/shubzkothekar/devbox/internal/config"
+	"github.com/shubzkothekar/devbox/internal/devcontainer"
 	"github.com/shubzkothekar/devbox/internal/registry"
 )
 
@@ -166,7 +167,10 @@ func (s Service) Install(ctx context.Context, id string) error {
 		}
 	}
 
-	return s.writePlan(plan)
+	if err := s.writePlan(plan); err != nil {
+		return err
+	}
+	return s.writeDevContainer(plan)
 }
 
 // Uninstall rejects uninstalling a plugin if any enabled plugin requires it.
@@ -221,7 +225,10 @@ func (s Service) Uninstall(ctx context.Context, id string) error {
 		return fmt.Errorf("write %s: %w", configPath, err)
 	}
 
-	return s.writePlan(plan)
+	if err := s.writePlan(plan); err != nil {
+		return err
+	}
+	return s.writeDevContainer(plan)
 }
 
 // Update re-materializes the latest commit for the configured Git ref, validates all
@@ -263,7 +270,10 @@ func (s Service) Update(ctx context.Context, id string) error {
 		}
 	}
 
-	return s.writePlan(plan)
+	if err := s.writePlan(plan); err != nil {
+		return err
+	}
+	return s.writeDevContainer(plan)
 }
 
 // ResolveGenerated resolves the current plugin configuration using the locked snapshot
@@ -285,6 +295,9 @@ func (s Service) ResolveGenerated(ctx context.Context) (config.ResolvedPlan, err
 	}
 
 	if err := s.writePlan(plan); err != nil {
+		return config.ResolvedPlan{}, err
+	}
+	if err := s.writeDevContainer(plan); err != nil {
 		return config.ResolvedPlan{}, err
 	}
 
@@ -328,9 +341,90 @@ func (s Service) writePlan(plan config.ResolvedPlan) error {
 	if err := os.MkdirAll(planDir, 0755); err != nil {
 		return fmt.Errorf("create plan directory %s: %w", planDir, err)
 	}
+
+	activeIDs := make(map[string]bool, len(plan.Plugins))
+	for _, p := range plan.Plugins {
+		activeIDs[p.ID] = true
+		destDir := filepath.Join(planDir, p.ID)
+		if p.Root != "" {
+			if err := copyDir(p.Root, destDir); err != nil {
+				return fmt.Errorf("copy plugin %q directory: %w", p.ID, err)
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(planDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() && !activeIDs[entry.Name()] {
+				_ = os.RemoveAll(filepath.Join(planDir, entry.Name()))
+			}
+		}
+	}
+
 	planPath := filepath.Join(planDir, "plan.json")
 	if err := config.WriteJSONAtomic(planPath, plan); err != nil {
 		return fmt.Errorf("write %s: %w", planPath, err)
+	}
+	return nil
+}
+
+func copyDir(src, dst string) error {
+	srcClean := filepath.Clean(src)
+	dstClean := filepath.Clean(dst)
+	if srcClean == dstClean {
+		return nil
+	}
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			content, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(dstPath, content, info.Mode().Perm()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s Service) writeDevContainer(plan config.ResolvedPlan) error {
+	basePath := filepath.Join(s.Root, ".devcontainer", "devcontainer.base.json")
+	baseData, err := os.ReadFile(basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", basePath, err)
+	}
+	merged, err := devcontainer.Merge(baseData, plan)
+	if err != nil {
+		return fmt.Errorf("merge devcontainer: %w", err)
+	}
+	outPath := filepath.Join(s.Root, ".devcontainer", "devcontainer.json")
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		return fmt.Errorf("create devcontainer directory %s: %w", filepath.Dir(outPath), err)
+	}
+	if err := config.WriteFileAtomic(outPath, merged); err != nil {
+		return fmt.Errorf("write %s: %w", outPath, err)
 	}
 	return nil
 }

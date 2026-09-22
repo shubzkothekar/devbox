@@ -94,6 +94,8 @@ services:
       - ./vpn:/workspace/vpn
       # Automatically authorize host Mac SSH key for passwordless SSH login
       - ${SSH_PUBKEY_PATH:-~/.ssh/id_ed25519.pub}:/tmp/authorized_keys:ro
+      # Mount generated plugins plan and materialized files (read-only)
+      - ./.generated/plugins:/opt/devbox/plugins:ro
       # Named cache for Go modules (keeps builds fast between rebuilds)
       - go-cache:/home/${DEV_USERNAME:-devbox}/go/pkg/mod
 

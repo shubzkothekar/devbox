@@ -410,3 +410,81 @@ commands:
 		t.Fatal("expected error for nonexistent plugin, got nil")
 	}
 }
+
+func TestDevContainerGeneratedOnInstallAndResolve(t *testing.T) {
+	regDir, _ := initGitRegistry(t, map[string]string{
+		"docker/plugin.yaml": `id: docker
+version: 1.0.0
+devcontainer:
+  extensions:
+    - ms-azuretools.vscode-docker
+  forwardPorts:
+    - 2375
+  containerEnv:
+    DOCKER_HOST: unix:///var/run/docker.sock
+`,
+	})
+	projectRoot := newTestProject(t, regDir, "main")
+	devcontainerDir := filepath.Join(projectRoot, ".devcontainer")
+	if err := os.MkdirAll(devcontainerDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	baseJSON := []byte(`{
+  "name": "Base Dev Container",
+  "forwardPorts": [8080],
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.go"]
+    }
+  }
+}`)
+	basePath := filepath.Join(devcontainerDir, "devcontainer.base.json")
+	if err := os.WriteFile(basePath, baseJSON, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	svc := NewService(projectRoot)
+	if err := svc.Install(context.Background(), "docker"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	outPath := filepath.Join(devcontainerDir, "devcontainer.json")
+	outData, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("ReadFile devcontainer.json: %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(outData, &root); err != nil {
+		t.Fatalf("Unmarshal devcontainer.json: %v", err)
+	}
+
+	ports, ok := root["forwardPorts"].([]any)
+	if !ok || len(ports) != 2 {
+		t.Fatalf("expected 2 forwardPorts, got: %v", root["forwardPorts"])
+	}
+
+	cust := root["customizations"].(map[string]any)
+	vscode := cust["vscode"].(map[string]any)
+	exts := vscode["extensions"].([]any)
+	if len(exts) != 2 || exts[0] != "golang.go" || exts[1] != "ms-azuretools.vscode-docker" {
+		t.Fatalf("unexpected extensions: %v", exts)
+	}
+
+	cEnv := root["containerEnv"].(map[string]any)
+	if cEnv["DOCKER_HOST"] != "unix:///var/run/docker.sock" {
+		t.Fatalf("unexpected containerEnv: %v", cEnv)
+	}
+
+	if err := os.Remove(outPath); err != nil {
+		t.Fatalf("Remove devcontainer.json: %v", err)
+	}
+
+	if _, err := svc.ResolveGenerated(context.Background()); err != nil {
+		t.Fatalf("ResolveGenerated: %v", err)
+	}
+
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("expected devcontainer.json to be regenerated: %v", err)
+	}
+}
