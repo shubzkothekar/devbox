@@ -11,28 +11,10 @@ services:
         USER_UID: ${DEV_UID:-501}
         USER_GID: ${DEV_GID:-501}
 
-        # Runtime Selection Flags (true/false) & Versions
-        INSTALL_GO: ${INSTALL_GO:-true}
-        GO_VERSION: ${GO_VERSION:-1.24.5}
+        # Passed through to plugin build hooks that consume it. Runtime/CLI
+        # selection and versions are configured via the devbox plugin system
+        # (see devbox.plugins.yml), not build args.
         GOPRIVATE: ${GOPRIVATE:-}
-
-        INSTALL_NODE: ${INSTALL_NODE:-true}
-        NODE_VERSION: ${NODE_VERSION:-22}
-
-        INSTALL_PYTHON: ${INSTALL_PYTHON:-true}
-
-        INSTALL_BUN: ${INSTALL_BUN:-false}
-
-        INSTALL_RUST: ${INSTALL_RUST:-false}
-
-        INSTALL_DB_CLI: ${INSTALL_DB_CLI:-true}
-
-        INSTALL_NATS: ${INSTALL_NATS:-true}
-
-        INSTALL_GH: ${INSTALL_GH:-true}
-
-        INSTALL_GLAB: ${INSTALL_GLAB:-true}
-        GLAB_VERSION: ${GLAB_VERSION:-1.118.0}
 
     image: devbox:latest
     container_name: devbox
@@ -52,25 +34,8 @@ services:
       # SSH Server (Connect using: ssh devbox or ssh -p 2222 devbox@localhost)
       - "${SSH_PORT:-2222}:22"
 
-      # --- Engage Services ---
-      # Frontend Web (Vite dev server)
-      - "5173:5173"
-      # Microservices backend ports
-      - "3100:3100"   # auth-service
-      - "3150:3150"   # api-backend
-      - "3300:3300"   # cronjob-service (Engage) / backend-service (CRM)
-      - "3530:3530"   # ai-flow
-      - "3720:3720"   # api-ingestion-service
-      - "3740:3740"   # api-processing-service
-
-      # --- CRM Services ---
-      - "3005:3005"   # CRM frontend
-      - "3400:3400"   # CRM user-service
-      - "3600:3600"   # CRM webhook-service
-      - "3800:3800"   # CRM leadbot-backend
-      - "3900:3900"   # CRM workflow-automation-service
-      - "4002:4002"   # CRM integration-service
-      - "4003:4003"   # CRM webhook-sender
+      # Add additional port mappings here for services running inside the
+      # container (e.g. "3000:3000" for a dev server).
 
     environment:
       - DEV_USERNAME=${DEV_USERNAME:-devbox}
