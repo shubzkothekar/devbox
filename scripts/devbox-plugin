@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: devbox-plugin <plugin-id> <command> [args...]" >&2
+  exit 1
+fi
+
+plugin_id="$1"
+command="$2"
+shift 2
+
+exec devbox plugin exec "$plugin_id" "$command" -- "$@"

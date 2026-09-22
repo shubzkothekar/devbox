@@ -45,3 +45,9 @@ logs/
 
 # --- Local Git Worktrees ---
 .worktrees/
+
+# --- DevBox Generated Files & Local Overrides ---
+.generated/
+.devcontainer/devcontainer.json
+!.devcontainer/devcontainer.base.json
+devbox.plugins.local.yml

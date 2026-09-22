@@ -76,7 +76,10 @@ if [ "$AUTO_CONNECT_VPN" = "true" ]; then
     /usr/local/bin/connect-vpn || echo "VPN auto-connect failed. You can connect manually with 'connect-vpn'."
 fi
 
-# 8. Execute requested command
+# 8. Run validated plugin startup hooks before the requested process
+/usr/local/bin/run-plugin-starts
+
+# 9. Execute requested command
 # If running default sshd command, run directly. Otherwise start ssh as a daemon first.
 if [[ "$*" == *"/usr/sbin/sshd"* ]]; then
     exec "$@"

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plan=${DEVBOX_PLUGIN_PLAN:-/opt/devbox/plugins/plan.json}
+[ -f "$plan" ] || exit 0
+
+marker_dir="${DEVBOX_PLUGIN_MARKER_DIR:-/var/lib/devbox/plugins}"
+mkdir -p "$marker_dir" 2>/dev/null || sudo mkdir -p "$marker_dir" 2>/dev/null || true
+
+jq -c '.plugins[] | select(.start != null and .start != "")' "$plan" | while IFS= read -r plugin; do
+  id=$(jq -r '.id' <<<"$plugin")
+  root=$(jq -r '.root' <<<"$plugin")
+  hook=$(jq -r '.start' <<<"$plugin")
+  if [ ! -d "$root" ] && [ -d "$(dirname "$plan")/$id" ]; then
+    root="$(dirname "$plan")/$id"
+  fi
+  marker="$marker_dir/$id.started"
+
+  if [ -f "$marker" ]; then
+    continue
+  fi
+
+  echo "[plugin:$id start] starting"
+  devbox plugin hook-env --plugin-json "$plugin" -- "$root/$hook"
+  touch "$marker" 2>/dev/null || sudo touch "$marker" 2>/dev/null || true
+done

@@ -1,0 +1,7 @@
+id: base
+name: Base tooling
+version: 1.0.0
+description: Core baseline plugin
+requires: []
+conflicts: []
+options: {}

@@ -1,0 +1,15 @@
+{
+  "name": "DevBox",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "devbox",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ]
+    }
+  },
+  "remoteUser": "devbox"
+}

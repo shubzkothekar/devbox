@@ -1,0 +1,5 @@
+registry:
+  source: git
+  url: https://github.com/example/devbox-registry.git
+  ref: main
+plugins: {}

@@ -8,6 +8,13 @@ A high-performance, modular Linux development container designed for macOS via *
 
 - [Overview & Architecture](#-overview--architecture)
 - [Prerequisites](#-prerequisites)
+- [Create a DevBox Project](#create-a-devbox-project)
+- [Plugin CLI Reference & Lifecycle](#plugin-cli-reference--lifecycle)
+  - [Command Reference](#command-reference)
+  - [Configuration Files & Reproducibility](#configuration-files--reproducibility)
+  - [Lifecycle & Execution Model](#lifecycle--execution-model)
+  - [Plugin Manifest Specification (`plugin.yaml`)](#plugin-manifest-specification-pluginyaml)
+  - [Lifecycle Adapters & Scripts](#lifecycle-adapters--scripts)
 - [Quick Start](#-quick-start)
 - [Runtime Configuration via `.env`](#-runtime-configuration-via-env)
   - [Available Runtime Flags](#available-runtime-flags)
@@ -24,6 +31,7 @@ A high-performance, modular Linux development container designed for macOS via *
 - [OpenVPN Integration](#-openvpn-integration)
 - [Port Reference](#-port-reference)
 - [Lifecycle & Maintenance Commands](#-lifecycle--maintenance-commands)
+- [Testing & Development](#-testing--development)
 
 ---
 
@@ -51,6 +59,137 @@ brew install colima docker docker-compose
 # Ensure you have an SSH ed25519 key generated on your Mac
 [ -f ~/.ssh/id_ed25519.pub ] || ssh-keygen -t ed25519 -C "devbox"
 ```
+
+---
+
+## Create a DevBox Project
+
+### 1. Install the Host `devbox` CLI
+
+Compile the host-side `devbox` binary from this repository:
+
+```bash
+# Compile and place into /usr/local/bin (or any directory on your PATH)
+go build -o /usr/local/bin/devbox ./cmd/devbox
+
+# Or install to your $GOPATH/bin
+go install ./cmd/devbox
+```
+
+### 2. Scaffold a New Project
+
+Create a new DevBox container workspace:
+
+```bash
+devbox create my-api --ref main
+cd my-api
+devbox plugin install docker
+```
+
+`create` preserves the scaffold repository's complete Git history, initializes `.env` from `.env.example` with `0600` permissions, and does not build or start a container. Use `--destination /absolute/or/relative/path` to choose a target other than `./my-api`.
+
+---
+
+## Plugin CLI Reference & Lifecycle
+
+DevBox includes a reproducible, modular plugin system driven by declarative manifests.
+
+### Command Reference
+
+```text
+devbox create <container-name> [--destination <path>] [--ref <git-ref>]
+devbox plugin list
+devbox plugin installed
+devbox plugin install <id>
+devbox plugin uninstall <id>
+devbox plugin update [<id>]
+devbox plugin <plugin-id> <command> [args...]
+```
+
+- **`devbox create <container-name> [--destination <path>] [--ref <git-ref>]`**:
+  Clones the scaffold repository, preserves complete Git history, initializes `.env` from `.env.example` with `0600` permissions, and refuses to overwrite an existing directory.
+- **`devbox plugin list`**:
+  Lists all available plugins from the materialized registry catalog along with their versions and descriptions. Runs offline using `registry.ReadOnly`.
+- **`devbox plugin installed`**:
+  Lists all enabled plugins in the active project along with resolved catalog versions. Runs offline using `registry.ReadOnly`.
+- **`devbox plugin install <id>`**:
+  Connects to the configured Git registry, materializes a snapshot, enables `<id>` and its required dependencies in `devbox.plugins.yml`, pins the resolved 40-character Git commit in `devbox.plugins.lock.yml`, writes `.generated/plugins/plan.json`, and updates `.devcontainer/devcontainer.json`.
+- **`devbox plugin uninstall <id>`**:
+  Disables `<id>` in `devbox.plugins.yml`, updates `.generated/plugins/plan.json` and `.devcontainer/devcontainer.json`, while retaining the locked Git commit. Rejects uninstallation if another enabled plugin depends on `<id>`.
+- **`devbox plugin update [<id>]`**:
+  Re-fetches the configured Git registry ref, advances `devbox.plugins.lock.yml` to the latest commit, re-resolves all enabled plugins, and regenerates `.generated/plugins/plan.json` and `.devcontainer/devcontainer.json`.
+- **`devbox plugin <plugin-id> <command> [args...]`**:
+  Dispatches a declared plugin command. Validates that the command is declared in the plugin manifest, exports configuration options as environment variables (`DEVBOX_PLUGIN_<PLUGIN>_<OPTION>`), and executes the script as the declared user (or via `sudo -n` when `user: root`). Also accessible via `devbox plugin exec <plugin-id> <command> [args...]` or the container-level `devbox-plugin` wrapper.
+
+### Configuration Files & Reproducibility
+
+- **`devbox.plugins.yml`** *(version-controlled)*:
+  Declares the project's canonical Git registry source and enabled plugins with optional parameter overrides.
+- **`devbox.plugins.lock.yml`** *(version-controlled)*:
+  Pins the exact 40-character Git commit hash of the registry. Ensures reproducible builds across team members and CI environments.
+- **`devbox.plugins.local.yml`** *(git-ignored)*:
+  Overrides the Git registry with a local file path (`source: path`, `path: /path/to/registry`) for plugin authoring and testing. In local development mode, lock files are neither read nor mutated, providing a non-reproducible override for active plugin iteration.
+- **`.generated/`** *(git-ignored)*:
+  Contains materialized plugin directories and `.generated/plugins/plan.json`. Generated files are strictly derived from the locked registry and project configuration.
+- **`.devcontainer/devcontainer.json`** *(git-ignored)*:
+  The active VS Code Dev Container configuration. Automatically merged from the tracked `.devcontainer/devcontainer.base.json` and all enabled plugin contributions (`extensions`, `containerEnv`, `mounts`, `postCreateCommands`, `forwardPorts`).
+
+### Lifecycle & Execution Model
+
+- **Registry Network Boundary**:
+  Only `devbox plugin install` and `devbox plugin update` connect to the network to fetch Git refs. All other commands (`list`, `installed`, `resolve`, container builds, and runtime hooks) operate offline against the pinned, materialized snapshot.
+- **Build Hooks (`hooks.build`)**:
+  Executed during Docker image builds via `scripts/run-plugin-builds`. Runs before container launch with plugin options passed as validated environment variables.
+- **Startup Hooks (`hooks.start`)**:
+  Executed during container startup via `scripts/run-plugin-starts` in `entrypoint.sh`. Writes an idempotent marker (`/var/lib/devbox/plugins/<id>.started`) upon successful completion to ensure hooks run exactly once per container lifecycle.
+- **Command Dispatch (`commands.<name>`)**:
+  Declared CLI utilities invoked on demand inside or outside the container, ensuring scoped execution and permission enforcement.
+
+### Plugin Manifest Specification (`plugin.yaml`)
+
+Plugins in the Git registry or local path are declared using strict `plugin.yaml` manifests:
+
+```yaml
+id: docker                      # Unique identifier (must match directory name under plugins/<id>)
+name: Docker Tooling            # Optional human-readable name
+version: 1.0.0                  # Semantic version string
+description: Docker CLI tools   # Catalog description
+requires:                       # Required plugin dependencies (enabled automatically on install)
+  - base
+conflicts:                      # Incompatible plugins (prevented from co-existing)
+  - podman
+options:                        # Typed user-configurable options
+  compose:
+    type: boolean               # "boolean", "string", or "number"
+    default: true
+hooks:
+  build: build.sh               # Relative script path executed during Docker image build
+  start: start.sh               # Relative script path executed during container startup
+commands:
+  status:
+    path: commands/status.sh    # Relative script path executed on command dispatch
+    user: devbox                # Target execution user ("devbox" or "root")
+devcontainer:                   # Additive Dev Container contributions
+  extensions:
+    - ms-azuretools.vscode-docker
+  mounts:
+    - source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind
+  containerEnv:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  postCreateCommands:
+    - docker --version
+  forwardPorts:
+    - 2375
+```
+
+### Lifecycle Adapters & Scripts
+
+DevBox provides dedicated internal adapters that operate on the generated plan:
+
+- **`scripts/resolve-plugins`**: Resolves the plugin plan from local configuration and generates `.generated/plugins/plan.json` and `.devcontainer/devcontainer.json` offline without network access.
+- **`scripts/run-plugin-builds`**: Invoked during the Docker image build stage. Iterates through plugins in dependency order and executes each declared `hooks.build` script with option environment variables.
+- **`scripts/run-plugin-starts`**: Invoked by `entrypoint.sh` during container boot. Executes declared `hooks.start` scripts in resolved order and records an idempotent marker in `/var/lib/devbox/plugins/<id>.started` to ensure startup hooks run only once per container lifecycle.
+- **`scripts/devbox-plugin <plugin-id> <command> [args...]`**: In-container convenience wrapper that dispatches declared plugin commands via `devbox plugin exec`.
 
 ---
 
@@ -318,26 +457,49 @@ setup-git-auth
 The host directory `./workspace` is mounted directly into the container at `/workspace`:
 
 ```
-devbox-container/
-├── .env.example          # Template configuration
-├── .env                  # Active configuration (ignored by git)
-├── .gitignore            # Ignores .env, vpn/*.ovpn, and workspace/*
-├── Dockerfile            # Container image definition with configurable runtimes
-├── docker-compose.yml    # Multi-runtime service orchestration
-├── entrypoint.sh         # Container initialization script
+devbox/
+├── .devcontainer/
+│   ├── devcontainer.base.json   # Base Dev Container template (tracked)
+│   └── devcontainer.json        # Generated & merged Dev Container (ignored)
+├── .generated/                  # Materialized plugin payloads & plan.json (ignored)
+│   └── plugins/
+│       ├── <plugin-id>/         # Materialized plugin payload
+│       └── plan.json            # Deterministic resolution plan
+├── cmd/
+│   └── devbox/                  # Host DevBox CLI source
+│       └── main.go
+├── internal/                    # Core Go packages
+│   ├── config/                  # Strict YAML/JSON configurations and lockfiles
+│   ├── devcontainer/            # Dev Container merge engine
+│   ├── integration/             # End-to-end integration test suite
+│   ├── plugins/                 # Dependency resolution, catalog & lifecycle service
+│   ├── project/                 # Project create bootstrap engine
+│   └── registry/                # Pinned Git & local path materialization
 ├── scripts/
-│   ├── devbox-env.sh     # System-wide PATH and environment setup
-│   ├── devbox-info.sh    # devbox-info command
-│   ├── connect-vpn.sh    # connect-vpn command
-│   └── setup-git-auth.sh # setup-git-auth command
-├── vpn/                  # OpenVPN profiles and auth files (ignored by git)
+│   ├── devbox-plugin            # In-container command dispatcher wrapper
+│   ├── resolve-plugins          # Offline plugin plan resolution adapter
+│   ├── run-plugin-builds        # Docker build-time plugin hook runner
+│   ├── run-plugin-starts        # Container startup plugin hook runner
+│   ├── connect-vpn.sh           # OpenVPN helper
+│   ├── devbox-env.sh            # In-container environment initialization
+│   ├── devbox-info.sh           # Runtime diagnostics inspector
+│   └── setup-git-auth.sh        # Git authentication configuration
+├── devbox.plugins.yml           # Declarative plugin selections (tracked)
+├── devbox.plugins.lock.yml      # Pinned Git commit lockfile (tracked)
+├── devbox.plugins.local.yml     # Local registry path override (ignored)
+├── Dockerfile                   # Multi-stage image build with plugin hooks
+├── docker-compose.yml           # Container service orchestration
+├── entrypoint.sh                # Container initialization with plugin start hooks
+├── .env.example                 # Template environment variables
+├── .env                         # Active environment variables (ignored)
+├── vpn/                         # OpenVPN profiles and credentials (ignored)
 │   ├── .gitkeep
 │   └── README.md
-└── workspace/            # Project repositories root (ignored by git)
+└── workspace/                   # Active project checkouts (ignored)
     ├── .gitkeep
     ├── README.md
-    ├── Engage/           # e.g., Go microservices + React frontend
-    └── CRM/              # e.g., Node.js TypeScript services
+    ├── Engage/                  # e.g., Go microservices + React frontend
+    └── CRM/                     # e.g., Node.js TypeScript services
 ```
 
 ### Working with Repositories Inside Workspace
@@ -515,4 +677,33 @@ docker compose up -d
 ### Clear Go Module Cache Volume
 ```bash
 docker compose down -v
+```
+
+---
+
+## 🧪 Testing & Development
+
+DevBox includes an automated test suite verifying unit behavior, registry resolution, and end-to-end plugin lifecycles.
+
+### Run All Go Tests
+```bash
+go test ./... -count=1
+```
+
+### Run Isolated Integration Tests
+The integration test suite executes no-network tests using local Git fixtures:
+```bash
+go test ./internal/integration -v -count=1
+```
+
+### Shell Script Validation
+Validate that all shell scripts and entrypoint hooks parse cleanly:
+```bash
+bash -n entrypoint.sh scripts/*
+```
+
+### Formatting & Cleanliness Checks
+Verify no trailing whitespace, carriage returns, or syntax formatting issues exist:
+```bash
+git diff --check
 ```

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plan=${DEVBOX_PLUGIN_PLAN:-/opt/devbox/plugins/plan.json}
+[ -f "$plan" ] || exit 0
+
+jq -c '.plugins[] | select(.build != null and .build != "")' "$plan" | while IFS= read -r plugin; do
+  id=$(jq -r '.id' <<<"$plugin")
+  root=$(jq -r '.root' <<<"$plugin")
+  hook=$(jq -r '.build' <<<"$plugin")
+  if [ ! -d "$root" ] && [ -d "$(dirname "$plan")/$id" ]; then
+    root="$(dirname "$plan")/$id"
+  fi
+  echo "[plugin:$id build] starting"
+  devbox plugin hook-env --plugin-json "$plugin" -- "$root/$hook"
+done
