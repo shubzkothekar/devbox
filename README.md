@@ -9,6 +9,10 @@ A high-performance, modular Linux development container designed for macOS via *
 - [Overview & Architecture](#-overview--architecture)
 - [Prerequisites](#-prerequisites)
 - [Create a DevBox Project](#create-a-devbox-project)
+- [Plugin CLI Reference & Lifecycle](#plugin-cli-reference--lifecycle)
+  - [Command Reference](#command-reference)
+  - [Configuration Files & Reproducibility](#configuration-files--reproducibility)
+  - [Lifecycle & Execution Model](#lifecycle--execution-model)
 - [Quick Start](#-quick-start)
 - [Runtime Configuration via `.env`](#-runtime-configuration-via-env)
   - [Available Runtime Flags](#available-runtime-flags)
@@ -66,6 +70,63 @@ devbox plugin install docker
 ```
 
 `create` preserves the scaffold repository's Git history, initializes `.env` from `.env.example`, and does not build or start a container. Use `--destination /absolute/or/relative/path` to choose a target other than `./my-api`.
+
+---
+
+## Plugin CLI Reference & Lifecycle
+
+DevBox includes a reproducible, modular plugin system driven by declarative manifests.
+
+### Command Reference
+
+```text
+devbox create <container-name> [--destination <path>] [--ref <git-ref>]
+devbox plugin list
+devbox plugin installed
+devbox plugin install <id>
+devbox plugin uninstall <id>
+devbox plugin update [<id>]
+devbox plugin <plugin-id> <command> [args...]
+```
+
+- **`devbox create <container-name> [--destination <path>] [--ref <git-ref>]`**:
+  Clones the scaffold repository, preserves complete Git history, initializes `.env` from `.env.example` with `0600` permissions, and refuses to overwrite an existing directory.
+- **`devbox plugin list`**:
+  Lists all available plugins from the materialized registry catalog along with their versions and descriptions. Runs offline using `registry.ReadOnly`.
+- **`devbox plugin installed`**:
+  Lists all enabled plugins in the active project along with resolved catalog versions. Runs offline using `registry.ReadOnly`.
+- **`devbox plugin install <id>`**:
+  Connects to the configured Git registry, materializes a snapshot, enables `<id>` and its required dependencies in `devbox.plugins.yml`, pins the resolved 40-character Git commit in `devbox.plugins.lock.yml`, writes `.generated/plugins/plan.json`, and updates `.devcontainer/devcontainer.json`.
+- **`devbox plugin uninstall <id>`**:
+  Disables `<id>` in `devbox.plugins.yml`, updates `.generated/plugins/plan.json` and `.devcontainer/devcontainer.json`, while retaining the locked Git commit. Rejects uninstallation if another enabled plugin depends on `<id>`.
+- **`devbox plugin update [<id>]`**:
+  Re-fetches the configured Git registry ref, advances `devbox.plugins.lock.yml` to the latest commit, re-resolves all enabled plugins, and regenerates `.generated/plugins/plan.json` and `.devcontainer/devcontainer.json`.
+- **`devbox plugin <plugin-id> <command> [args...]`**:
+  Dispatches a declared plugin command. Validates that the command is declared in the plugin manifest, exports configuration options as environment variables (`DEVBOX_PLUGIN_<PLUGIN>_<OPTION>`), and executes the script as the declared user (or via `sudo -n` when `user: root`). Also accessible via `devbox plugin exec <plugin-id> <command> [args...]` or the container-level `devbox-plugin` wrapper.
+
+### Configuration Files & Reproducibility
+
+- **`devbox.plugins.yml`** *(version-controlled)*:
+  Declares the project's canonical Git registry source and enabled plugins with optional parameter overrides.
+- **`devbox.plugins.lock.yml`** *(version-controlled)*:
+  Pins the exact 40-character Git commit hash of the registry. Ensures reproducible builds across team members and CI environments.
+- **`devbox.plugins.local.yml`** *(git-ignored)*:
+  Overrides the Git registry with a local file path (`source: path`, `path: /path/to/registry`) for plugin authoring and testing. In local development mode, lock files are neither read nor mutated, providing a non-reproducible override for active plugin iteration.
+- **`.generated/`** *(git-ignored)*:
+  Contains materialized plugin directories and `.generated/plugins/plan.json`. Generated files are strictly derived from the locked registry and project configuration.
+- **`.devcontainer/devcontainer.json`** *(git-ignored)*:
+  The active VS Code Dev Container configuration. Automatically merged from the tracked `.devcontainer/devcontainer.base.json` and all enabled plugin contributions (`extensions`, `containerEnv`, `mounts`, `postCreateCommands`, `forwardPorts`).
+
+### Lifecycle & Execution Model
+
+- **Registry Network Boundary**:
+  Only `devbox plugin install` and `devbox plugin update` connect to the network to fetch Git refs. All other commands (`list`, `installed`, `resolve`, container builds, and runtime hooks) operate offline against the pinned, materialized snapshot.
+- **Build Hooks (`hooks.build`)**:
+  Executed during Docker image builds via `scripts/run-plugin-builds`. Runs before container launch with plugin options passed as validated environment variables.
+- **Startup Hooks (`hooks.start`)**:
+  Executed during container startup via `scripts/run-plugin-starts` in `entrypoint.sh`. Writes an idempotent marker (`/var/lib/devbox/plugins/<id>.started`) upon successful completion to ensure hooks run exactly once per container lifecycle.
+- **Command Dispatch (`commands.<name>`)**:
+  Declared CLI utilities invoked on demand inside or outside the container, ensuring scoped execution and permission enforcement.
 
 ---
 

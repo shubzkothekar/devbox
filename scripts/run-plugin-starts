@@ -4,7 +4,7 @@ set -euo pipefail
 plan=${DEVBOX_PLUGIN_PLAN:-/opt/devbox/plugins/plan.json}
 [ -f "$plan" ] || exit 0
 
-marker_dir="/var/lib/devbox/plugins"
+marker_dir="${DEVBOX_PLUGIN_MARKER_DIR:-/var/lib/devbox/plugins}"
 mkdir -p "$marker_dir" 2>/dev/null || sudo mkdir -p "$marker_dir" 2>/dev/null || true
 
 jq -c '.plugins[] | select(.start != null and .start != "")' "$plan" | while IFS= read -r plugin; do

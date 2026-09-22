@@ -1,0 +1,24 @@
+id: docker
+name: Docker tooling
+version: 1.0.0
+description: Installs Docker CLI tooling and optional Compose support.
+requires:
+  - base
+options:
+  compose:
+    type: boolean
+    default: true
+hooks:
+  build: build.sh
+  start: start.sh
+commands:
+  status:
+    path: commands/status.sh
+    user: devbox
+devcontainer:
+  extensions:
+    - ms-azuretools.vscode-docker
+  containerEnv:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  postCreateCommands:
+    - docker version

@@ -146,9 +146,32 @@ func (s Service) Install(ctx context.Context, id string) error {
 	for k, v := range state.Config.Plugins {
 		updatedPlugins[k] = v
 	}
-	sel := updatedPlugins[id]
-	sel.Enabled = true
-	updatedPlugins[id] = sel
+
+	visited := make(map[string]bool)
+	var enableWithDependencies func(string) error
+	enableWithDependencies = func(pluginID string) error {
+		if visited[pluginID] {
+			return nil
+		}
+		visited[pluginID] = true
+		entry, ok := catalog[pluginID]
+		if !ok {
+			return fmt.Errorf("unknown plugin %q", pluginID)
+		}
+		for _, req := range entry.manifest.Requires {
+			if err := enableWithDependencies(req); err != nil {
+				return err
+			}
+		}
+		sel := updatedPlugins[pluginID]
+		sel.Enabled = true
+		updatedPlugins[pluginID] = sel
+		return nil
+	}
+
+	if err := enableWithDependencies(id); err != nil {
+		return err
+	}
 
 	plan, err := Resolve(source, updatedPlugins)
 	if err != nil {
